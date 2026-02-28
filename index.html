@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Groq Resume Parser</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0a; min-height: 100vh; color: #e0e0e0;
+        }
+        .container { max-width: 900px; margin: 60px auto; padding: 0 24px; }
+        h1 {
+            font-size: 2.2rem; font-weight: 700; text-align: center;
+            margin-bottom: 6px; letter-spacing: -0.02em; color: #fff;
+        }
+        .subtitle {
+            text-align: center; color: #888; margin-bottom: 40px;
+            font-size: 1rem;
+        }
+        .subtitle span { color: #f55036; font-weight: 600; }
+        .upload-area {
+            background: #151515; border: 2px dashed #333;
+            border-radius: 12px; padding: 48px 32px; text-align: center;
+            cursor: pointer; margin-bottom: 24px; transition: all 0.2s;
+        }
+        .upload-area:hover { border-color: #f55036; }
+        .upload-area.dragover { border-color: #f55036; background: #1a1210; }
+        .upload-icon { font-size: 2.5rem; margin-bottom: 12px; }
+        .upload-text { font-size: 1.1rem; font-weight: 500; color: #ccc; }
+        .upload-sub { color: #666; font-size: 0.9rem; margin-top: 6px; }
+        #fileInput { display: none; }
+        .btn {
+            background: #f55036; color: #fff; border: none;
+            padding: 12px 28px; border-radius: 8px; font-size: 1rem;
+            font-weight: 600; cursor: pointer; margin-top: 16px;
+            transition: background 0.2s;
+        }
+        .btn:hover { background: #d4402a; }
+        .btn:disabled { background: #444; cursor: not-allowed; }
+        .loading { display: none; text-align: center; margin: 32px 0; }
+        .spinner {
+            width: 36px; height: 36px; border: 3px solid #333;
+            border-top-color: #f55036; border-radius: 50%;
+            animation: spin 0.8s linear infinite; margin: 0 auto 12px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .result { display: none; margin-top: 32px; }
+        .result-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 20px;
+        }
+        .result-header h2 { font-size: 1.3rem; color: #fff; }
+        .meta { color: #888; font-size: 0.85rem; }
+        .meta span { color: #f55036; font-weight: 600; }
+        .section {
+            background: #151515; border-radius: 10px; padding: 20px;
+            margin-bottom: 16px; border: 1px solid #222;
+        }
+        .section h3 {
+            font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em;
+            color: #f55036; margin-bottom: 12px;
+        }
+        .field { margin-bottom: 8px; }
+        .field-label { color: #888; font-size: 0.85rem; }
+        .field-value { color: #e0e0e0; font-size: 0.95rem; margin-top: 2px; }
+        .tag {
+            display: inline-block; background: #1e1e1e; color: #ccc;
+            padding: 4px 10px; border-radius: 6px; font-size: 0.82rem;
+            margin: 3px 4px 3px 0; border: 1px solid #333;
+        }
+        .tag.primary { border-color: #f55036; color: #f55036; }
+        .exp-item { margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid #222; }
+        .exp-item:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+        .exp-title { font-weight: 600; color: #fff; font-size: 0.95rem; }
+        .exp-company { color: #f55036; font-size: 0.9rem; }
+        .exp-date { color: #666; font-size: 0.82rem; margin-top: 2px; }
+        .exp-resp { color: #aaa; font-size: 0.88rem; margin-top: 6px; padding-left: 16px; }
+        .exp-resp li { margin-bottom: 3px; }
+        .json-toggle {
+            background: none; border: 1px solid #333; color: #888;
+            padding: 6px 14px; border-radius: 6px; cursor: pointer;
+            font-size: 0.85rem;
+        }
+        .json-toggle:hover { border-color: #f55036; color: #f55036; }
+        .json-view {
+            display: none; background: #0d0d0d; border-radius: 8px;
+            padding: 16px; overflow-x: auto; font-family: 'SF Mono', monospace;
+            font-size: 0.82rem; color: #aaa; margin-top: 16px;
+            border: 1px solid #222; max-height: 500px; overflow-y: auto;
+        }
+        .error {
+            background: #1a1010; border: 1px solid #f55036; border-radius: 10px;
+            padding: 16px; color: #f55036; display: none; margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Resume Parser</h1>
+        <p class="subtitle">Powered by <span>Llama 3.1</span> via Groq</p>
+
+        <div class="upload-area" id="dropZone" onclick="document.getElementById('fileInput').click()">
+            <div class="upload-icon">+</div>
+            <div class="upload-text">Drop resume here or click to upload</div>
+            <div class="upload-sub">PDF, DOCX, or TXT (max 10MB)</div>
+            <input type="file" id="fileInput" accept=".pdf,.docx,.txt">
+        </div>
+
+        <div style="text-align:center">
+            <button class="btn" id="parseBtn" disabled onclick="parseResume()">Parse Resume</button>
+        </div>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <div style="color:#888">Parsing with Llama 3.1...</div>
+        </div>
+
+        <div class="error" id="error"></div>
+
+        <div class="result" id="result">
+            <div class="result-header">
+                <h2 id="resultFilename">Results</h2>
+                <div>
+                    <span class="meta"><span id="resultTime">0</span>ms</span>
+                    <button class="json-toggle" onclick="toggleJson()">JSON</button>
+                </div>
+            </div>
+
+            <div id="sections"></div>
+            <div class="json-view" id="jsonView"><pre id="jsonContent"></pre></div>
+        </div>
+    </div>
+
+    <script>
+        let selectedFile = null;
+
+        const drop = document.getElementById('dropZone');
+        const input = document.getElementById('fileInput');
+        const btn = document.getElementById('parseBtn');
+
+        drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('dragover'); });
+        drop.addEventListener('dragleave', () => drop.classList.remove('dragover'));
+        drop.addEventListener('drop', e => {
+            e.preventDefault(); drop.classList.remove('dragover');
+            if (e.dataTransfer.files.length) { selectedFile = e.dataTransfer.files[0]; onFileSelected(); }
+        });
+        input.addEventListener('change', () => { selectedFile = input.files[0]; onFileSelected(); });
+
+        function onFileSelected() {
+            if (selectedFile) {
+                drop.querySelector('.upload-text').textContent = selectedFile.name;
+                btn.disabled = false;
+            }
+        }
+
+        async function parseResume() {
+            if (!selectedFile) return;
+            const loading = document.getElementById('loading');
+            const result = document.getElementById('result');
+            const error = document.getElementById('error');
+
+            loading.style.display = 'block';
+            result.style.display = 'none';
+            error.style.display = 'none';
+            btn.disabled = true;
+
+            const form = new FormData();
+            form.append('file', selectedFile);
+
+            try {
+                const resp = await fetch('/parse', { method: 'POST', body: form });
+                const data = await resp.json();
+
+                if (data.error) {
+                    error.textContent = data.error;
+                    error.style.display = 'block';
+                    return;
+                }
+
+                renderResult(data);
+            } catch (e) {
+                error.textContent = 'Network error: ' + e.message;
+                error.style.display = 'block';
+            } finally {
+                loading.style.display = 'none';
+                btn.disabled = false;
+            }
+        }
+
+        function renderResult(data) {
+            const r = data.result;
+            document.getElementById('resultFilename').textContent = data.filename;
+            document.getElementById('resultTime').textContent = data.processing_time_ms;
+            document.getElementById('jsonContent').textContent = JSON.stringify(r, null, 2);
+
+            const s = document.getElementById('sections');
+            s.innerHTML = '';
+
+            // Personal Details
+            const p = r.PersonalDetails || {};
+            s.innerHTML += section('Personal Details', [
+                field('Name', p.FullName),
+                field('Email', p.Email),
+                field('Phone', p.Phone),
+                field('Location', p.Location),
+                field('LinkedIn', p.LinkedIn),
+                field('GitHub', p.GitHub),
+                field('Portfolio', p.Portfolio),
+            ].join(''));
+
+            // Summary
+            if (r.Summary) s.innerHTML += section('Summary', `<div class="field-value">${esc(r.Summary)}</div>`);
+
+            // Experience
+            const exps = r.ListOfExperiences || [];
+            if (exps.length) {
+                s.innerHTML += section('Experience (' + exps.length + ')', exps.map(e => `
+                    <div class="exp-item">
+                        <div class="exp-title">${esc(e.Title || '')}</div>
+                        <div class="exp-company">${esc(e.Company || '')}${e.Location ? ' &mdash; ' + esc(e.Location) : ''}</div>
+                        <div class="exp-date">${esc(e.StartDate || '')} - ${esc(e.EndDate || '')}</div>
+                        ${(e.Responsibilities || []).length ? '<ul class="exp-resp">' + e.Responsibilities.map(r => '<li>' + esc(r) + '</li>').join('') + '</ul>' : ''}
+                    </div>
+                `).join(''));
+            }
+
+            // Education
+            const edus = r.ListOfEducation || [];
+            if (edus.length) {
+                s.innerHTML += section('Education (' + edus.length + ')', edus.map(e => `
+                    <div class="exp-item">
+                        <div class="exp-title">${esc(e.Degree || '')}${e.Field ? ' in ' + esc(e.Field) : ''}</div>
+                        <div class="exp-company">${esc(e.Institution || '')}</div>
+                        <div class="exp-date">${esc(e.GraduationDate || '')}${e.GPA ? ' | GPA: ' + esc(e.GPA) : ''}</div>
+                    </div>
+                `).join(''));
+            }
+
+            // Skills
+            const skills = r.ListOfSkills || [];
+            const primary = r.PrimarySkills || [];
+            if (skills.length || primary.length) {
+                let html = '';
+                if (primary.length) {
+                    html += '<div style="margin-bottom:10px"><span class="field-label">Primary:</span><br>' + primary.map(sk => `<span class="tag primary">${esc(sk)}</span>`).join('') + '</div>';
+                }
+                if (skills.length) {
+                    html += '<div><span class="field-label">All Skills (' + skills.length + '):</span><br>' + skills.map(sk => `<span class="tag">${esc(sk)}</span>`).join('') + '</div>';
+                }
+                s.innerHTML += section('Skills', html);
+            }
+
+            // Certifications
+            const certs = r.Certifications || [];
+            if (certs.length) {
+                s.innerHTML += section('Certifications', certs.map(c => `<div class="field-value">- ${esc(typeof c === 'string' ? c : c.name || JSON.stringify(c))}</div>`).join(''));
+            }
+
+            // Projects
+            const projs = r.Projects || [];
+            if (projs.length) {
+                s.innerHTML += section('Projects (' + projs.length + ')', projs.map(p => `
+                    <div class="exp-item">
+                        <div class="exp-title">${esc(p.Name || '')}</div>
+                        <div class="field-value" style="margin-top:4px">${esc(p.Description || '')}</div>
+                        ${(p.Technologies || []).length ? '<div style="margin-top:6px">' + p.Technologies.map(t => '<span class="tag">' + esc(t) + '</span>').join('') + '</div>' : ''}
+                        ${p.Link ? '<div style="margin-top:4px"><a href="' + esc(p.Link) + '" style="color:#f55036">' + esc(p.Link) + '</a></div>' : ''}
+                    </div>
+                `).join(''));
+            }
+
+            // Achievements
+            const achs = r.Achievements || [];
+            if (achs.length) {
+                s.innerHTML += section('Achievements', achs.map(a => `<div class="field-value">- ${esc(typeof a === 'string' ? a : JSON.stringify(a))}</div>`).join(''));
+            }
+
+            document.getElementById('result').style.display = 'block';
+        }
+
+        function section(title, content) {
+            return `<div class="section"><h3>${title}</h3>${content}</div>`;
+        }
+
+        function field(label, value) {
+            if (!value) return '';
+            return `<div class="field"><span class="field-label">${label}:</span> <span class="field-value">${esc(value)}</span></div>`;
+        }
+
+        function esc(s) {
+            if (!s) return '';
+            const d = document.createElement('div');
+            d.textContent = String(s);
+            return d.innerHTML;
+        }
+
+        function toggleJson() {
+            const v = document.getElementById('jsonView');
+            v.style.display = v.style.display === 'none' ? 'block' : 'none';
+        }
+    </script>
+</body>
+</html>
