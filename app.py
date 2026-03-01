@@ -15,7 +15,7 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
-from groq_parser import parse_resume, extract_text_from_file, is_groq_configured
+from groq_parser import parse_resume, extract_text_from_file, is_groq_configured, GROQ_MODEL
 
 app = Flask(__name__, static_folder='.')
 CORS(app)
@@ -84,7 +84,7 @@ def health():
     return jsonify({
         'status': 'healthy',
         'groq_configured': is_groq_configured(),
-        'model': os.environ.get('GROQ_MODEL', 'llama-3.1-8b-instant'),
+        'model': GROQ_MODEL,
         'supported_formats': sorted(ALLOWED_EXTENSIONS),
         'max_bulk_files': BULK_MAX_FILES,
         'timestamp': time.time(),
