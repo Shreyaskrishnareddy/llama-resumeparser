@@ -433,8 +433,9 @@ def _fix_name_splitting(parsed):
     pd["FullName"] = " ".join(p.title() for p in parts)
 
 
-def _fix_duplicate_summary(parsed):
-    """Remove first KeyResponsibility if it duplicates the Summary field."""
+
+def _fix_merge_summary(parsed):
+    """Merge Summary into KeyResponsibilities as first bullet, then clear it."""
     experiences = parsed.get("ListOfExperiences")
     if not isinstance(experiences, list):
         return
@@ -442,11 +443,28 @@ def _fix_duplicate_summary(parsed):
         if not isinstance(exp, dict):
             continue
         summary = exp.get("Summary")
-        resps = exp.get("KeyResponsibilities")
-        if not isinstance(summary, str) or not isinstance(resps, list) or not resps:
+        if not isinstance(summary, str) or not summary.strip():
             continue
-        if isinstance(resps[0], str) and resps[0].strip() == summary.strip():
-            exp["KeyResponsibilities"] = resps[1:]
+        resps = exp.get("KeyResponsibilities")
+        if not isinstance(resps, list):
+            resps = []
+        # Avoid duplicate if first bullet already matches summary
+        if resps and isinstance(resps[0], str) and resps[0].strip() == summary.strip():
+            pass  # already there as first bullet
+        else:
+            resps.insert(0, summary.strip())
+        exp["KeyResponsibilities"] = resps
+        exp["Summary"] = None
+
+
+def _fix_project_company(parsed):
+    """Remove CompanyWorked from projects — projects stand on their own."""
+    projects = parsed.get("Projects")
+    if not isinstance(projects, list):
+        return
+    for proj in projects:
+        if isinstance(proj, dict):
+            proj["CompanyWorked"] = None
 
 
 def _fix_employment_type(parsed):
@@ -488,8 +506,14 @@ def _post_process(parsed):
         pass
 
     try:
-        _fix_duplicate_summary(parsed)
-        applied.append("duplicate_summary")
+        _fix_merge_summary(parsed)
+        applied.append("merge_summary")
+    except Exception:
+        pass
+
+    try:
+        _fix_project_company(parsed)
+        applied.append("project_company")
     except Exception:
         pass
 
