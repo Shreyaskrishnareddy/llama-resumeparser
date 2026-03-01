@@ -433,6 +433,22 @@ def _fix_name_splitting(parsed):
     pd["FullName"] = " ".join(p.title() for p in parts)
 
 
+def _fix_duplicate_summary(parsed):
+    """Remove first KeyResponsibility if it duplicates the Summary field."""
+    experiences = parsed.get("ListOfExperiences")
+    if not isinstance(experiences, list):
+        return
+    for exp in experiences:
+        if not isinstance(exp, dict):
+            continue
+        summary = exp.get("Summary")
+        resps = exp.get("KeyResponsibilities")
+        if not isinstance(summary, str) or not isinstance(resps, list) or not resps:
+            continue
+        if isinstance(resps[0], str) and resps[0].strip() == summary.strip():
+            exp["KeyResponsibilities"] = resps[1:]
+
+
 def _fix_employment_type(parsed):
     """Null out default 'Full-time' employment types that the LLM fabricates."""
     experiences = parsed.get("ListOfExperiences")
@@ -468,6 +484,12 @@ def _post_process(parsed):
     try:
         _fix_skill_experience(parsed)
         applied.append("skill_experience")
+    except Exception:
+        pass
+
+    try:
+        _fix_duplicate_summary(parsed)
+        applied.append("duplicate_summary")
     except Exception:
         pass
 
