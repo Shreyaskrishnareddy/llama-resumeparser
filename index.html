@@ -201,27 +201,43 @@
             // Personal Details
             const p = r.PersonalDetails || {};
             s.innerHTML += section('Personal Details', [
-                field('Name', p.FullName),
-                field('Email', p.Email),
-                field('Phone', p.Phone),
+                field('Full Name', p.FullName),
+                field('First Name', p.FirstName),
+                field('Middle Name', p.MiddleName),
+                field('Last Name', p.LastName),
+                field('Email', p.EmailID),
+                field('Phone', p.PhoneNumber),
+                field('Country Code', p.CountryCode),
                 field('Location', p.Location),
                 field('LinkedIn', p.LinkedIn),
                 field('GitHub', p.GitHub),
                 field('Portfolio', p.Portfolio),
             ].join(''));
 
-            // Summary
-            if (r.Summary) s.innerHTML += section('Summary', `<div class="field-value">${esc(r.Summary)}</div>`);
+            // Overall Summary
+            const os = r.OverallSummary || {};
+            if (os.Summary || os.CurrentJobRole || os.TotalExperience) {
+                let html = '';
+                html += field('Current Role', os.CurrentJobRole);
+                html += field('Total Experience', os.TotalExperience);
+                html += field('Domain', os.Domain);
+                if (os.RelevantJobTitles && os.RelevantJobTitles.length) {
+                    html += '<div class="field"><span class="field-label">Related Titles:</span><br>' + os.RelevantJobTitles.map(t => `<span class="tag">${esc(t)}</span>`).join('') + '</div>';
+                }
+                if (os.Summary) html += `<div class="field" style="margin-top:8px"><span class="field-label">Summary:</span><div class="field-value">${esc(os.Summary)}</div></div>`;
+                s.innerHTML += section('Overall Summary', html);
+            }
 
             // Experience
             const exps = r.ListOfExperiences || [];
             if (exps.length) {
                 s.innerHTML += section('Experience (' + exps.length + ')', exps.map(e => `
                     <div class="exp-item">
-                        <div class="exp-title">${esc(e.Title || '')}</div>
-                        <div class="exp-company">${esc(e.Company || '')}${e.Location ? ' &mdash; ' + esc(e.Location) : ''}</div>
-                        <div class="exp-date">${esc(e.StartDate || '')} - ${esc(e.EndDate || '')}</div>
-                        ${(e.Responsibilities || []).length ? '<ul class="exp-resp">' + e.Responsibilities.map(r => '<li>' + esc(r) + '</li>').join('') + '</ul>' : ''}
+                        <div class="exp-title">${esc(e.JobTitle || '')}</div>
+                        <div class="exp-company">${esc(e.CompanyName || '')}${e.Location ? ' &mdash; ' + esc(e.Location) : ''}</div>
+                        <div class="exp-date">${esc(e.StartDate || '')} - ${esc(e.EndDate || '')}${e.ExperienceInYears ? ' (' + esc(e.ExperienceInYears) + ')' : ''}</div>
+                        ${e.Summary ? '<div class="field-value" style="margin-top:4px;color:#aaa;font-size:0.88rem">' + esc(e.Summary) + '</div>' : ''}
+                        ${(e.KeyResponsibilities || []).length ? '<ul class="exp-resp">' + e.KeyResponsibilities.map(r => '<li>' + esc(r) + '</li>').join('') + '</ul>' : ''}
                     </div>
                 `).join(''));
             }
@@ -232,8 +248,8 @@
                 s.innerHTML += section('Education (' + edus.length + ')', edus.map(e => `
                     <div class="exp-item">
                         <div class="exp-title">${esc(e.Degree || '')}${e.Field ? ' in ' + esc(e.Field) : ''}</div>
-                        <div class="exp-company">${esc(e.Institution || '')}</div>
-                        <div class="exp-date">${esc(e.GraduationDate || '')}${e.GPA ? ' | GPA: ' + esc(e.GPA) : ''}</div>
+                        <div class="exp-company">${esc(e.Institution || '')}${e.Location ? ' &mdash; ' + esc(e.Location) : ''}</div>
+                        <div class="exp-date">${esc(e.YearPassed || '')}${e.TypeOfEducation ? ' | ' + esc(e.TypeOfEducation) : ''}${e.GPA ? ' | GPA: ' + esc(e.GPA) : ''}</div>
                     </div>
                 `).join(''));
             }
@@ -241,13 +257,26 @@
             // Skills
             const skills = r.ListOfSkills || [];
             const primary = r.PrimarySkills || [];
+            const secondary = r.SecondarySkills || [];
             if (skills.length || primary.length) {
                 let html = '';
                 if (primary.length) {
                     html += '<div style="margin-bottom:10px"><span class="field-label">Primary:</span><br>' + primary.map(sk => `<span class="tag primary">${esc(sk)}</span>`).join('') + '</div>';
                 }
+                if (secondary.length) {
+                    html += '<div style="margin-bottom:10px"><span class="field-label">Secondary:</span><br>' + secondary.map(sk => `<span class="tag">${esc(sk)}</span>`).join('') + '</div>';
+                }
                 if (skills.length) {
-                    html += '<div><span class="field-label">All Skills (' + skills.length + '):</span><br>' + skills.map(sk => `<span class="tag">${esc(sk)}</span>`).join('') + '</div>';
+                    html += '<div><span class="field-label">All Skills (' + skills.length + '):</span>';
+                    html += '<table style="width:100%;margin-top:8px;font-size:0.85rem"><tr style="color:#888"><td>Skill</td><td>Months</td><td>Last Used</td><td>Related</td></tr>';
+                    skills.forEach(sk => {
+                        if (typeof sk === 'object') {
+                            html += `<tr><td style="color:#e0e0e0">${esc(sk.SkillName)}</td><td>${sk.SkillExperienceInMonths || ''}</td><td>${esc(sk.LastUsed || '')}</td><td>${(sk.RelevantSkills||[]).map(r=>esc(r)).join(', ')}</td></tr>`;
+                        } else {
+                            html += `<tr><td style="color:#e0e0e0">${esc(sk)}</td><td></td><td></td><td></td></tr>`;
+                        }
+                    });
+                    html += '</table></div>';
                 }
                 s.innerHTML += section('Skills', html);
             }
@@ -255,7 +284,10 @@
             // Certifications
             const certs = r.Certifications || [];
             if (certs.length) {
-                s.innerHTML += section('Certifications', certs.map(c => `<div class="field-value">- ${esc(typeof c === 'string' ? c : c.name || JSON.stringify(c))}</div>`).join(''));
+                s.innerHTML += section('Certifications (' + certs.length + ')', certs.map(c => {
+                    if (typeof c === 'string') return `<div class="field-value">- ${esc(c)}</div>`;
+                    return `<div class="exp-item"><div class="exp-title">${esc(c.CertificationName || '')}</div><div class="exp-date">${esc(c.IssuerName || '')}${c.IssuedYear && c.IssuedYear !== null ? ' | ' + esc(c.IssuedYear) : ''}</div></div>`;
+                }).join(''));
             }
 
             // Projects
@@ -263,8 +295,10 @@
             if (projs.length) {
                 s.innerHTML += section('Projects (' + projs.length + ')', projs.map(p => `
                     <div class="exp-item">
-                        <div class="exp-title">${esc(p.Name || '')}</div>
-                        <div class="field-value" style="margin-top:4px">${esc(p.Description || '')}</div>
+                        <div class="exp-title">${esc(p.ProjectName || '')}</div>
+                        ${p.RoleInProject ? '<div class="exp-company">' + esc(p.RoleInProject) + (p.CompanyWorked ? ' @ ' + esc(p.CompanyWorked) : '') + '</div>' : ''}
+                        ${p.StartDate || p.EndDate ? '<div class="exp-date">' + esc(p.StartDate || '') + ' - ' + esc(p.EndDate || '') + '</div>' : ''}
+                        ${p.Description ? '<div class="field-value" style="margin-top:4px">' + esc(p.Description) + '</div>' : ''}
                         ${(p.Technologies || []).length ? '<div style="margin-top:6px">' + p.Technologies.map(t => '<span class="tag">' + esc(t) + '</span>').join('') + '</div>' : ''}
                         ${p.Link ? '<div style="margin-top:4px"><a href="' + esc(p.Link) + '" style="color:#f55036">' + esc(p.Link) + '</a></div>' : ''}
                     </div>
@@ -274,7 +308,16 @@
             // Achievements
             const achs = r.Achievements || [];
             if (achs.length) {
-                s.innerHTML += section('Achievements', achs.map(a => `<div class="field-value">- ${esc(typeof a === 'string' ? a : JSON.stringify(a))}</div>`).join(''));
+                s.innerHTML += section('Achievements (' + achs.length + ')', achs.map(a => {
+                    if (typeof a === 'string') return `<div class="field-value">- ${esc(a)}</div>`;
+                    return `<div class="field-value">- ${esc(a.Description || a.Metric || JSON.stringify(a))}</div>`;
+                }).join(''));
+            }
+
+            // Languages
+            const langs = r.Languages || [];
+            if (langs.length) {
+                s.innerHTML += section('Languages', langs.map(l => `<span class="tag">${esc(l)}</span>`).join(''));
             }
 
             document.getElementById('result').style.display = 'block';

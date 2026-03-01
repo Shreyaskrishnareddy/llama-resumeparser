@@ -15,56 +15,102 @@ GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 
-SYSTEM_PROMPT = """You are an expert resume parser. You extract structured data from resumes with perfect accuracy. Return ONLY valid JSON. No explanations, no markdown fences, no extra text."""
+SYSTEM_PROMPT = """You are an expert resume parser built for an Applicant Tracking System. You extract structured data from resumes with perfect accuracy. You must return ONLY valid JSON. No explanations, no markdown fences, no extra text."""
 
-PARSE_PROMPT = """Extract ALL information from this resume into the following JSON structure. Use null for missing fields, empty arrays [] where no items found. Be thorough — capture every skill, every experience, every detail.
+PARSE_PROMPT = """Extract ALL information from the resume below into the exact JSON structure shown. Follow every instruction carefully.
+
+RULES:
+- Use null for missing fields, empty arrays [] where no items found.
+- Be thorough — capture every skill, every experience, every detail.
+- CRITICAL name splitting rule: The LAST word of the full name is ALWAYS the LastName. The FIRST word is ALWAYS the FirstName. Everything in between is MiddleName. Examples: "John Smith" → First="John", Middle=null, Last="Smith". "John Michael Smith" → First="John", Middle="Michael", Last="Smith". "Shreyas Krishnareddy" → First="Shreyas", Middle=null, Last="Krishnareddy". LastName must NEVER be null or empty.
+- For CountryCode: extract from the phone number (e.g., "+1" for US, "+91" for India). If no country code is visible, infer from the resume's location.
+- For ExperienceInYears per role: calculate the difference between StartDate and EndDate (e.g., "Jan 2021" to "Present" with today being Feb 2026 = "5.2 years"). Use "Present" as Feb 2026 for calculation.
+- For RelevantJobTitles: list 3-5 synonymous or closely related job titles for the CurrentJobRole (e.g., "Software Engineer" → ["Software Developer", "SDE", "Application Developer", "Full Stack Developer"]).
+- For each skill: SkillExperienceInMonths = total months across all roles where the skill was used. LastUsed = the EndDate of the most recent role where it was used. If a skill appears in the Skills section but not tied to a specific role, estimate from overall experience.
+- For RelevantSkills per skill: list 1-3 related/synonymous skills from the same technology family (e.g., "Angular 11" → ["Angular", "Angular 12", "AngularJS"]; "Python" → ["Python 3", "CPython"]).
+- For Education Type: infer "Full-time", "Part-time", "Online", or "Distance" if possible. Default to "Full-time" if not stated.
+- For Certifications: split into name, issuing organization, and year if mentioned (e.g., "AWS Solutions Architect - 2023" → Name: "AWS Solutions Architect", Issuer: "Amazon Web Services", IssuedYear: "2023").
+- For Projects: link to the company/experience where the project was done if evident. Extract or infer the candidate's role in the project.
+- Keep all string values concise. KeyResponsibilities should be short bullet strings, not paragraphs.
+- Use JSON null (not the string "null") for any field where information is not available in the resume.
+- For OverallSummary.Summary: if no explicit Summary/Objective section exists, generate a 1-2 sentence professional summary from the candidate's experience and skills.
+- For Project descriptions: extract what the project does from the resume text. Never leave Description empty if the resume mentions what the project is about.
+- For Achievements: extract quantified accomplishments from anywhere in the resume (experience bullets, projects, etc.) even if there is no dedicated Achievements section. Look for metrics like percentages, numbers, scale (e.g., "95% accuracy", "10K+ resumes", "reduced costs by 100%").
 
 {
   "PersonalDetails": {
     "FullName": "",
-    "Email": "",
-    "Phone": "",
+    "FirstName": "",
+    "MiddleName": null,
+    "LastName": "",
+    "EmailID": "",
+    "PhoneNumber": "",
+    "CountryCode": "",
     "Location": "",
     "LinkedIn": "",
     "GitHub": "",
     "Portfolio": ""
   },
-  "Summary": "",
-  "CurrentJobRole": "",
-  "TotalExperience": "",
+  "OverallSummary": {
+    "Summary": "",
+    "CurrentJobRole": "",
+    "RelevantJobTitles": [],
+    "TotalExperience": "",
+    "Domain": ""
+  },
   "ListOfExperiences": [
     {
-      "Company": "",
-      "Title": "",
+      "JobTitle": "",
+      "CompanyName": "",
+      "Location": "",
       "StartDate": "",
       "EndDate": "",
-      "Location": "",
-      "Responsibilities": []
+      "ExperienceInYears": "",
+      "Summary": "",
+      "KeyResponsibilities": []
     }
   ],
+  "ListOfSkills": [
+    {
+      "SkillName": "",
+      "SkillExperienceInMonths": 0,
+      "LastUsed": "",
+      "RelevantSkills": []
+    }
+  ],
+  "PrimarySkills": [],
+  "SecondarySkills": [],
   "ListOfEducation": [
     {
-      "Institution": "",
       "Degree": "",
+      "TypeOfEducation": "",
       "Field": "",
-      "GraduationDate": "",
+      "Institution": "",
+      "Location": "",
+      "YearPassed": "",
       "GPA": ""
     }
   ],
-  "ListOfSkills": [],
-  "PrimarySkills": ["top 8-10 core languages/frameworks"],
-  "SecondarySkills": ["supporting tools, methodologies, soft skills"],
-  "Domain": "",
-  "Certifications": [],
-  "Achievements": [],
+  "Certifications": [
+    {
+      "CertificationName": "",
+      "IssuerName": "",
+      "IssuedYear": ""
+    }
+  ],
   "Projects": [
     {
-      "Name": "",
+      "ProjectName": "",
       "Description": "",
+      "CompanyWorked": "",
+      "RoleInProject": "",
       "Technologies": [],
+      "StartDate": "",
+      "EndDate": "",
       "Link": ""
     }
   ],
+  "Achievements": [],
   "Languages": []
 }
 
@@ -73,7 +119,7 @@ RESUME:
 RESUME_TEXT_HERE
 ---
 
-Return ONLY the JSON object."""
+Return ONLY the JSON object. No other text."""
 
 
 def is_groq_configured():
@@ -117,6 +163,7 @@ def parse_resume(resume_text, model=None, api_key=None):
                 ],
                 "temperature": 0.1,
                 "top_p": 0.9,
+                "max_tokens": 8192,
             },
             timeout=60,
         )

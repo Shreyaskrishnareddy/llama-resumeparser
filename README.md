@@ -11,18 +11,19 @@ LLM-powered resume parser using **Llama 3.1 8B** via [Groq](https://groq.com) fo
 - **Web UI included** — drag-and-drop interface with structured result display
 - **Docker-ready** — one command to deploy anywhere
 
-## Extracted Fields
+## Extracted Fields (BRD-Compliant)
 
 | Category | Fields |
 |----------|--------|
-| Personal Details | Full Name, Email, Phone, Location, LinkedIn, GitHub, Portfolio |
-| Professional | Summary, Current Role, Total Experience, Domain |
-| Experience | Company, Title, Dates, Location, Responsibilities (per role) |
-| Education | Institution, Degree, Field, Graduation Date, GPA |
-| Skills | All Skills, Primary Skills, Secondary Skills |
-| Certifications | Name + Issuing Organization |
-| Projects | Name, Description, Technologies, Link |
-| Other | Achievements, Languages |
+| Personal Details | FullName, FirstName, MiddleName, LastName, EmailID, PhoneNumber, CountryCode, Location, LinkedIn, GitHub, Portfolio |
+| Overall Summary | Summary, CurrentJobRole, RelevantJobTitles (synonyms), TotalExperience, Domain |
+| Experience | JobTitle, CompanyName, Location, StartDate, EndDate, ExperienceInYears, Summary, KeyResponsibilities |
+| Skills | SkillName, SkillExperienceInMonths, LastUsed, RelevantSkills (synonyms), PrimarySkills, SecondarySkills |
+| Education | Degree, TypeOfEducation, Field, Institution, Location, YearPassed, GPA |
+| Certifications | CertificationName, IssuerName, IssuedYear |
+| Projects | ProjectName, Description, CompanyWorked, RoleInProject, Technologies, StartDate, EndDate, Link |
+| Achievements | Quantified accomplishments extracted from entire resume |
+| Languages | Language names |
 
 ## Quick Start
 
