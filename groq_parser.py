@@ -409,6 +409,30 @@ def _fix_skill_experience(parsed):
             skill["SkillExperienceInMonths"] = None
 
 
+def _fix_name_splitting(parsed):
+    """Deterministically split FullName into First/Middle/Last by whitespace."""
+    pd = parsed.get("PersonalDetails")
+    if not isinstance(pd, dict):
+        return
+    full_name = pd.get("FullName")
+    if not isinstance(full_name, str) or not full_name.strip():
+        return
+    parts = full_name.strip().split()
+    if len(parts) == 1:
+        pd["FirstName"] = parts[0].title()
+        pd["MiddleName"] = None
+        pd["LastName"] = parts[0].title()
+    elif len(parts) == 2:
+        pd["FirstName"] = parts[0].title()
+        pd["MiddleName"] = None
+        pd["LastName"] = parts[1].title()
+    else:
+        pd["FirstName"] = parts[0].title()
+        pd["MiddleName"] = " ".join(parts[1:-1]).title()
+        pd["LastName"] = parts[-1].title()
+    pd["FullName"] = " ".join(p.title() for p in parts)
+
+
 def _fix_employment_type(parsed):
     """Null out default 'Full-time' employment types that the LLM fabricates."""
     experiences = parsed.get("ListOfExperiences")
@@ -428,6 +452,12 @@ def _post_process(parsed):
         return parsed
 
     applied = []
+
+    try:
+        _fix_name_splitting(parsed)
+        applied.append("name_splitting")
+    except Exception:
+        pass
 
     try:
         _fix_experience_years(parsed)
