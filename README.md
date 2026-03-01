@@ -7,8 +7,12 @@ LLM-powered resume parser using **Llama 3.1 8B** via [Groq](https://groq.com) fo
 - **Single-pass full parsing** — no chunking, no token limits, reads the entire resume
 - **Structured JSON output** — personal details, experiences, education, skills, certifications, projects, achievements
 - **~2 second latency** — Groq's LPU inference engine makes LLM parsing practical for production
-- **File upload + raw text APIs** — supports PDF, DOCX, and TXT
+- **File upload + raw text APIs** — supports PDF, DOC, DOCX, TXT, JPG, PNG, TIFF, BMP (OCR)
 - **Web UI included** — drag-and-drop interface with structured result display
+- **Bulk processing** — upload up to 50 files or import from CSV
+- **ATS integration** — output mapped to Bullhorn, Dice, Ceipal formats
+- **OCR support** — parse scanned PDFs and images via Tesseract
+- **Security headers** — XSS, clickjacking, content-type protections
 - **Docker-ready** — one command to deploy anywhere
 
 ## Extracted Fields (BRD-Compliant)
@@ -128,18 +132,47 @@ curl -X POST http://localhost:8000/parse/text \
   -d '{"text": "John Smith\njohn@email.com\n\nEXPERIENCE\n..."}'
 ```
 
-### `GET /health` — Health check
+### `POST /parse/bulk` — Bulk upload (up to 50 files)
 
 ```bash
-curl http://localhost:8000/health
+curl -X POST http://localhost:8000/parse/bulk \
+  -F "files=@resume1.pdf" \
+  -F "files=@resume2.docx" \
+  -F "files=@resume3.jpg"
 ```
 
 ```json
 {
-  "status": "healthy",
-  "groq_configured": true,
-  "model": "llama-3.1-8b-instant"
+  "total_files": 3,
+  "successful": 3,
+  "failed": 0,
+  "total_processing_time_ms": 8500,
+  "results": [...]
 }
+```
+
+### `POST /import/csv` — CSV bulk import
+
+Import candidate records from a CSV file. Each row's columns are sent to the LLM as resume text.
+
+```bash
+curl -X POST http://localhost:8000/import/csv \
+  -F "file=@candidates.csv"
+```
+
+### `POST /parse/ats/<name>` — ATS-formatted output
+
+Parse a resume and return fields mapped to a specific ATS format. Supported: `bullhorn`, `dice`, `ceipal`.
+
+```bash
+curl -X POST http://localhost:8000/parse/ats/bullhorn \
+  -F "file=@resume.pdf"
+```
+
+### `GET /health` — Health check
+
+```bash
+curl http://localhost:8000/health
 ```
 
 ## Configuration
@@ -174,7 +207,7 @@ llama-resumeparser/
 
 ## How It Works
 
-1. **Text extraction** — PyMuPDF (PDF) or docx2txt (DOCX) extracts raw text from the uploaded file
+1. **Text extraction** — PyMuPDF (PDF), docx2txt (DOCX), antiword (DOC), Tesseract OCR (images/scanned PDFs)
 2. **LLM parsing** — Full resume text is sent to Llama 3.1 via Groq with a structured JSON schema prompt
 3. **JSON extraction** — Response is parsed with a robust extractor that handles markdown fences, whitespace, and malformed output
 4. **Structured response** — Clean JSON with all fields + metadata (timing, token usage, model info)

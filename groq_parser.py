@@ -263,14 +263,18 @@ def _extract_json(text):
 
 
 def extract_text_from_file(filepath):
-    """Extract text from PDF, DOCX, DOC, or TXT files."""
+    """Extract text from PDF, DOCX, DOC, TXT, or image files."""
     ext = os.path.splitext(filepath)[1].lower()
 
     if ext == '.pdf':
         return _extract_pdf(filepath)
     elif ext == '.docx':
         return _extract_docx(filepath)
-    elif ext == '.txt':
+    elif ext == '.doc':
+        return _extract_doc(filepath)
+    elif ext in ('.jpg', '.jpeg', '.png', '.tiff', '.bmp'):
+        return _extract_image_ocr(filepath)
+    elif ext in ('.txt', '.html', '.htm'):
         with open(filepath, 'r', errors='ignore') as f:
             return f.read()
     else:
@@ -278,13 +282,21 @@ def extract_text_from_file(filepath):
 
 
 def _extract_pdf(filepath):
-    """Extract text from PDF using PyMuPDF."""
+    """Extract text from PDF using PyMuPDF. Falls back to OCR for scanned PDFs."""
     import fitz
     doc = fitz.open(filepath)
     text = ""
     for page in doc:
         text += page.get_text()
     doc.close()
+
+    # If very little text extracted, try OCR (scanned PDF)
+    if len(text.strip()) < 50:
+        try:
+            return _extract_image_ocr(filepath)
+        except Exception:
+            pass
+
     return text
 
 
@@ -292,6 +304,67 @@ def _extract_docx(filepath):
     """Extract text from DOCX."""
     import docx2txt
     return docx2txt.process(filepath)
+
+
+def _extract_doc(filepath):
+    """Extract text from legacy DOC using antiword."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ['antiword', filepath],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout
+    except FileNotFoundError:
+        pass
+
+    # Fallback: try reading as binary with olefile
+    try:
+        import olefile
+        ole = olefile.OleFileIO(filepath)
+        if ole.exists('WordDocument'):
+            stream = ole.openstream('WordDocument')
+            data = stream.read()
+            # Extract ASCII text from binary
+            text = data.decode('latin-1', errors='ignore')
+            # Filter printable characters
+            clean = ''.join(c if c.isprintable() or c in '\n\r\t' else ' ' for c in text)
+            ole.close()
+            if len(clean.strip()) > 50:
+                return clean
+    except Exception:
+        pass
+
+    raise ValueError("Cannot extract text from DOC file. Install antiword: apt-get install antiword")
+
+
+def _extract_image_ocr(filepath):
+    """Extract text from images using Tesseract OCR."""
+    try:
+        from PIL import Image
+        import pytesseract
+    except ImportError:
+        raise ValueError("OCR not available. Install: pip install pytesseract Pillow")
+
+    ext = os.path.splitext(filepath)[1].lower()
+
+    # For PDFs, convert pages to images first
+    if ext == '.pdf':
+        import fitz
+        doc = fitz.open(filepath)
+        full_text = ""
+        for page in doc:
+            pix = page.get_pixmap(dpi=300)
+            img_data = pix.tobytes("png")
+            from io import BytesIO
+            img = Image.open(BytesIO(img_data))
+            full_text += pytesseract.image_to_string(img) + "\n"
+        doc.close()
+        return full_text
+    else:
+        img = Image.open(filepath)
+        return pytesseract.image_to_string(img)
 
 
 if __name__ == "__main__":
