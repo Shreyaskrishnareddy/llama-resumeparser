@@ -51,7 +51,7 @@ Full text sent to Llama 3.1 8B via Groq API (single-pass, no chunking)
 Robust JSON Extraction (handles markdown fences, malformed output)
     |
     v
-Post-Processing (fix ExperienceInYears, SkillExperienceInMonths, EmploymentType)
+Post-Processing (6 deterministic fixes: name splitting, ExperienceInYears, SkillExperienceInMonths, merge summary, project company, EmploymentType)
     |
     v
 Structured JSON Response + Metadata
@@ -106,7 +106,7 @@ Structured JSON Response + Metadata
 3. Full text is injected into the prompt template (no truncation, no chunking)
 4. Single API call to Groq with the system prompt + user prompt
 5. `_extract_json()` extracts JSON from the LLM response (handles edge cases)
-6. `_post_process()` applies deterministic corrections to three known LLM error patterns
+6. `_post_process()` applies deterministic corrections to six known LLM error patterns
 7. Metadata (model, timing, tokens, post-processing flags) is attached
 8. JSON response returned to client
 
@@ -115,7 +115,7 @@ Structured JSON Response + Metadata
 | Decision | Rationale |
 |----------|-----------|
 | Single-pass (no chunking) | Chunking loses context across sections. Full resume text gives the LLM complete picture. Tradeoff: resumes >16K tokens fail with 413 error. |
-| Post-processing over re-prompting | The 8B model consistently makes the same 3 mistakes. Fixing them in Python is faster and more reliable than multi-turn prompting. |
+| Post-processing over re-prompting | The 8B model consistently makes the same 6 mistakes. Fixing them in Python is faster and more reliable than multi-turn prompting. |
 | No database | Stateless API. The parser doesn't store resumes or results. Keeps it simple and avoids PII storage concerns. |
 | Gunicorn with 2 workers | Matches Groq's rate limits. More workers would just hit 429 errors. |
 | Vanilla JS frontend | No build step, no dependencies. The UI is a single HTML file served by Flask. |
@@ -454,19 +454,35 @@ curl -X POST http://localhost:8000/parse/ats/bullhorn -F "file=@resume.pdf"
 
 ### Why Post-Processing Is Needed
 
-The Llama 3.1 8B model produces good structured JSON but consistently makes three types of errors that cannot be fixed through prompt engineering alone:
+The Llama 3.1 8B model produces good structured JSON but consistently makes six types of errors that cannot be fixed through prompt engineering alone:
 
 | Problem | LLM Behavior | Example |
 |---------|-------------|---------|
+| **Name splitting** | Inconsistent First/Middle/Last splitting | "Ahmad Qassem Ahmad Elsheikh" split incorrectly |
 | **ExperienceInYears** | Math errors in date calculations | July 2021 → Present = "5.2" (should be 4.6) |
 | **SkillExperienceInMonths** | Fabricates identical values for all skills | All skills get 120 or 180 months |
+| **Summary duplication** | Summary text not merged into responsibilities | Summary and first bullet contain same text |
+| **Project company** | Links projects to companies unreliably | CompanyWorked filled with wrong company |
 | **EmploymentType** | Defaults to "Full-time" even when not stated | Every role gets "Full-time" |
 
 ### Solution
 
-Deterministic Python post-processing in `_post_process()` runs after every successful LLM parse. Each fix is wrapped in try/except so one failure doesn't block others.
+Deterministic Python post-processing in `_post_process()` runs after every successful LLM parse. There are 6 fixes, each wrapped in try/except so one failure doesn't block others.
 
-### Fix 1: `_fix_experience_years()`
+### Fix 1: `_fix_name_splitting()`
+
+**What:** Deterministically splits `FullName` into `FirstName`, `MiddleName`, and `LastName` by whitespace.
+
+**How:**
+1. Splits `FullName` on whitespace
+2. First word → `FirstName`, last word → `LastName`, everything in between → `MiddleName`
+3. For 2-word names, `MiddleName` = null
+4. For 1-word names, both `FirstName` and `LastName` are set to that word
+5. All parts are title-cased for consistency
+
+**Why needed:** The LLM sometimes splits names inconsistently, especially with multi-part names from different cultural conventions. Deterministic splitting ensures the "last word = LastName" rule is always applied.
+
+### Fix 2: `_fix_experience_years()`
 
 **What:** Recalculates `ExperienceInYears` from `StartDate` and `EndDate` for every experience entry.
 
@@ -486,7 +502,7 @@ Deterministic Python post-processing in `_post_process()` runs after every succe
 | Emburse | Jan 2021 | Jun 2021 | 0.8 | **0.4** |
 | PepsiCo | Aug 2020 | Dec 2020 | 0.5 | **0.3** |
 
-### Fix 2: `_fix_skill_experience()`
+### Fix 3: `_fix_skill_experience()`
 
 **What:** Recalculates `SkillExperienceInMonths` by searching each experience's text for skill name mentions.
 
@@ -511,7 +527,27 @@ Deterministic Python post-processing in `_post_process()` runs after every succe
 | Python | 180 | **null** | In skills section only, not in experience text |
 | FORTRAN | 120 | **null** | In skills section only |
 
-### Fix 3: `_fix_employment_type()`
+### Fix 4: `_fix_merge_summary()`
+
+**What:** Merges each experience entry's `Summary` field into `KeyResponsibilities` as the first bullet, then clears the `Summary`.
+
+**How:**
+1. For each experience entry with a non-empty `Summary`
+2. Checks if the first `KeyResponsibilities` bullet already matches the summary (avoids duplication)
+3. If not a duplicate, inserts the summary as the first bullet
+4. Sets `Summary` to null
+
+**Why needed:** The LLM sometimes duplicates the summary text both in `Summary` and as the first responsibility bullet. This fix consolidates everything into `KeyResponsibilities` for a cleaner output, since the ATS downstream consumes responsibilities as the primary content.
+
+### Fix 5: `_fix_project_company()`
+
+**What:** Removes `CompanyWorked` from all project entries by setting it to null.
+
+**How:** Iterates through all projects and sets `CompanyWorked` to null.
+
+**Why needed:** The LLM often incorrectly links projects to companies based on proximity in the resume text rather than actual association. Since the linkage is unreliable, it's safer to remove it than to present wrong data.
+
+### Fix 6: `_fix_employment_type()`
 
 **What:** Nulls out "Full-time", "Full Time", and "Fulltime" values that the LLM fabricates when the resume doesn't state employment type.
 
@@ -530,7 +566,7 @@ All post-processing results are tracked in `_metadata._post_processed`:
 
 ```json
 "_metadata": {
-  "_post_processed": ["experience_years", "skill_experience", "employment_type"]
+  "_post_processed": ["name_splitting", "experience_years", "skill_experience", "merge_summary", "project_company", "employment_type"]
 }
 ```
 
