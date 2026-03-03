@@ -1,8 +1,8 @@
 # Llama Resume Parser — Technical Documentation
 
 > LLM-powered resume parser using Llama 3.1 8B via Groq for structured data extraction.
-> **Version**: 1.0.0
-> **Last Updated**: 2026-02-28
+> **Version**: 1.1.0
+> **Last Updated**: 2026-03-03
 > **Repository**: [github.com/Shreyaskrishnareddy/llama-resumeparser](https://github.com/Shreyaskrishnareddy/llama-resumeparser)
 
 ---
@@ -51,7 +51,7 @@ Full text sent to Llama 3.1 8B via Groq API (single-pass, no chunking)
 Robust JSON Extraction (handles markdown fences, malformed output)
     |
     v
-Post-Processing (6 deterministic fixes: name splitting, ExperienceInYears, SkillExperienceInMonths, merge summary, project company, EmploymentType)
+Post-Processing (9 deterministic fixes: name splitting, ExperienceInYears, SkillExperienceInMonths, merge summary, project company, skill contamination, empty certs, EmploymentType, skill hallucination guard)
     |
     v
 Structured JSON Response + Metadata
@@ -75,7 +75,10 @@ Structured JSON Response + Metadata
 |                                                          |
 |  /parse          Single file upload                      |
 |  /parse/text     Raw text input                          |
-|  /parse/bulk     Up to 50 files (5 concurrent workers)   |
+|  /parse/bulk     Sync bulk (up to 50, 5 workers)         |
+|  /jobs/bulk      Async bulk submit (returns job ID)      |
+|  /jobs/<id>      Poll async job progress                 |
+|  /jobs/<id>/results  Download async job results          |
 |  /import/csv     CSV row-by-row parsing                  |
 |  /parse/ats/*    ATS-mapped output (Bullhorn/Dice/Ceipal)|
 |  /health         Health check                            |
@@ -282,7 +285,96 @@ curl -X POST http://localhost:8000/parse/bulk \
 }
 ```
 
-**Constraints:** Max 50 files, 50 MB total. Uses 5 concurrent workers.
+**Constraints:** Max 50 files, 50 MB total. Uses 5 concurrent workers. Blocks until all files are done.
+
+---
+
+### Async Bulk Processing
+
+For large batches, use the async job system. Files are processed in the background with rate limiting (2s between API calls). Progress is trackable via polling.
+
+**Architecture:** SQLite job queue + background daemon thread. Zero external dependencies. Process-safe across Gunicorn workers via WAL mode.
+
+#### `POST /jobs/bulk`
+
+Submit resumes for background processing. Returns immediately with a job ID.
+
+**Request:** `multipart/form-data` with key `files` (multiple)
+
+```bash
+curl -X POST http://localhost:8000/jobs/bulk \
+  -F "files=@resume1.pdf" \
+  -F "files=@resume2.docx"
+```
+
+**Response (202):**
+```json
+{
+  "job_id": "e88b0151138044ebb474a3d66304528c",
+  "status": "processing",
+  "total_files": 2,
+  "message": "Job submitted. Poll GET /jobs/e88b01... for progress."
+}
+```
+
+#### `GET /jobs/<job_id>`
+
+Poll job progress.
+
+**Response (200):**
+```json
+{
+  "job_id": "e88b0151138044ebb474a3d66304528c",
+  "status": "processing",
+  "total_files": 2,
+  "completed_files": 1,
+  "failed_files": 0,
+  "progress_pct": 50.0,
+  "created_at": 1772578608.11,
+  "updated_at": 1772578620.55,
+  "completed_at": null
+}
+```
+
+**Status values:** `processing` → `completed`
+
+#### `GET /jobs/<job_id>/results`
+
+Download results when job is completed.
+
+**Response (200):**
+```json
+{
+  "job_id": "e88b01...",
+  "total_files": 2,
+  "successful": 2,
+  "failed": 0,
+  "results": [
+    { "filename": "resume1.pdf", "status": "completed", "processing_time_ms": 6712, "result": { ... } },
+    { "filename": "resume2.docx", "status": "completed", "processing_time_ms": 6368, "result": { ... } }
+  ]
+}
+```
+
+**Error (409):** Returned if job is not yet completed.
+
+#### Job Lifecycle
+
+```
+POST /jobs/bulk → [processing] → background thread picks up files one by one
+  → each file: pending → processing → completed/failed
+  → job counters updated after each file
+  → [completed] → results JSON written to data/results/{job_id}.json
+  → [cleaned up after 24h] → uploads, results, DB records deleted
+```
+
+#### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BULK_RATE_INTERVAL` | `2.0` | Seconds between Groq API calls (~30 req/min) |
+| `BULK_JOB_TTL_HOURS` | `24` | Hours before completed jobs are cleaned up |
+| `BULK_DATA_DIR` | `./data` | Directory for SQLite DB, uploads, and results |
 
 ---
 
@@ -560,15 +652,50 @@ Deterministic Python post-processing in `_post_process()` runs after every succe
 | EtQ | Full Time | **null** |
 | United Airline | Contract | **Contract** (kept) |
 
+### Fix 7: `_fix_skill_contamination()`
+
+**What:** Removes certifications and soft skills that leaked into `ListOfSkills`.
+
+**How:** Checks each skill's name against keyword sets for certifications (PMP, Scrum Master, CCNA, etc.) and soft skills (communication, leadership, teamwork, etc.). Matching skills are removed.
+
+**Why needed:** Despite prompt instructions, the LLM sometimes places certifications and soft skills into the skills list.
+
+### Fix 8: `_fix_empty_certs()`
+
+**What:** Removes hallucinated placeholder certification objects with null/empty names.
+
+**How:** Filters out any certification where `CertificationName` is empty, "null", "none", or "n/a".
+
+**Why needed:** The LLM sometimes generates empty cert objects to fill the schema template.
+
+### Fix 9: `_fix_skill_hallucination()` (text verification)
+
+**What:** Removes skills whose `SkillName` does not appear in the actual resume text.
+
+**How:**
+1. Takes both the parsed JSON and the original resume text
+2. For each skill, checks if the name appears in the resume using smart matching:
+   - Special characters (C#, .NET, C++) → direct substring match
+   - Short names (C, R, Go) → word-boundary regex
+   - Standard names → case-insensitive substring
+3. Skills not found in the resume text are removed
+
+**Why needed:** The LLM sometimes generates plausible-sounding skills that aren't actually written in the resume (e.g., "Angular 11", "Python 3", "Financial Process Optimization"). This fix eliminated 396 out of 409 mismatches in deep verification testing.
+
+**Verified Results (Lakshman Podili):** 217 → 28 skills (removed 189 hallucinated Azure sub-service variants)
+**Verified Results (Zaman S):** 227 → 50 skills (removed 177 repetitive financial process variants)
+
 ### Metadata
 
 All post-processing results are tracked in `_metadata._post_processed`:
 
 ```json
 "_metadata": {
-  "_post_processed": ["name_splitting", "experience_years", "skill_experience", "merge_summary", "project_company", "employment_type"]
+  "_post_processed": ["name_splitting", "experience_years", "skill_experience", "merge_summary", "project_company", "skill_contamination", "empty_certs", "employment_type"]
 }
 ```
+
+The skill hallucination fix runs separately after `_post_process()` since it requires access to the original resume text.
 
 If a fix fails (bad data), it's silently skipped and omitted from the list.
 
@@ -804,9 +931,10 @@ timeout: 60s        # Per-request timeout
 ```
 llama-resumeparser/
 |
-+-- app.py                  # Flask API server (all endpoints, ATS mappings, security headers)
++-- app.py                  # Flask API server (single, bulk, async, ATS endpoints)
 +-- groq_parser.py          # Core logic (text extraction, LLM call, JSON parsing, post-processing)
-+-- index.html              # Web UI (drag-drop upload, structured result display)
++-- bulk_processor.py       # Async bulk processing (SQLite job queue + background worker)
++-- index.html              # Web UI (single + bulk upload tabs, progress tracking)
 +-- requirements.txt        # Python dependencies
 +-- Dockerfile              # Docker build (Python 3.11 + antiword + tesseract)
 +-- render.yaml             # Render deployment config
@@ -816,22 +944,56 @@ llama-resumeparser/
 +-- README.md               # Project README
 +-- DOCUMENTATION.md        # This file
 |
++-- deep_verify.py          # Deep field-level verification (42 fields × 22 resumes)
 +-- test_resumes.py         # Test suite (22 resumes, cross-verification, Excel report)
-+-- test-results/           # Test output (JSON results per resume + Excel report)
++-- test-results/           # Test output (JSON results, Excel reports)
++-- data/                   # Runtime: SQLite DB, uploads, results (gitignored)
 ```
 
 ### File Responsibilities
 
 | File | Lines | Responsibility |
 |------|-------|---------------|
-| `groq_parser.py` | ~500 | Text extraction, Groq API integration, JSON extraction, post-processing pipeline |
-| `app.py` | ~375 | HTTP endpoints, file handling, ATS field mapping, security, CORS |
-| `index.html` | ~350 | Web UI with drag-drop, result rendering, JSON toggle |
-| `test_resumes.py` | ~590 | Automated cross-verification of parsed fields against raw text |
+| `groq_parser.py` | ~970 | Text extraction, Groq API integration, JSON extraction, 9-step post-processing pipeline |
+| `app.py` | ~430 | HTTP endpoints, file handling, async job routes, ATS field mapping, security, CORS |
+| `bulk_processor.py` | ~250 | SQLite job store, background daemon thread, rate-limited processing, auto-cleanup |
+| `index.html` | ~530 | Web UI with single/bulk tabs, progress bar, results table, JSON download |
+| `deep_verify.py` | ~640 | 42-field verification against resume text, Excel report generation |
 
 ---
 
 ## 14. Changelog
+
+### v1.1.0 (2026-03-03)
+
+**Async Bulk Processing**
+- Added `bulk_processor.py` — SQLite-backed job queue with background daemon thread
+- New endpoints: `POST /jobs/bulk`, `GET /jobs/<id>`, `GET /jobs/<id>/results`
+- Rate-limited processing (2s between API calls, configurable via `BULK_RATE_INTERVAL`)
+- Auto-cleanup of expired jobs (default 24h TTL)
+- Process-safe across Gunicorn workers via SQLite WAL mode
+
+**Skill Hallucination Guard**
+- Added `_fix_skill_hallucination()` — verifies every SkillName against actual resume text
+- Smart matching: word-boundary regex for short names (C, R, Go), direct substring for special chars (C#, .NET, C++)
+- Eliminated 396/409 mismatches in deep verification (97% reduction)
+
+**Additional Post-Processing**
+- Added `_fix_skill_contamination()` — removes certifications and soft skills from ListOfSkills
+- Added `_fix_empty_certs()` — removes hallucinated placeholder cert objects
+
+**Web UI**
+- Added tabbed interface: Single Resume / Bulk Upload
+- Bulk tab: multi-file selection, folder upload, drag & drop
+- Live progress bar with polling
+- Results table with name, role, skills count, status per file
+- "View" button to inspect individual results, "Download JSON" for export
+
+**Deep Verification**
+- Created `deep_verify.py` — verifies all 42 official data fields across all resumes
+- Status system: MATCH, PARTIAL, MISMATCH, NULL (null = acceptable, not failure)
+- Generates 4-sheet Excel report matching team's data fields format
+- Final results: 99.7% accuracy (MATCH+PARTIAL), 0.3% MISMATCH rate
 
 ### v1.0.0 (2026-02-28)
 

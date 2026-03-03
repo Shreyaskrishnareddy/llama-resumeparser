@@ -9,6 +9,7 @@ import os
 import csv
 import time
 import tempfile
+import uuid
 import concurrent.futures
 from io import StringIO
 from flask import Flask, request, jsonify, send_from_directory
@@ -16,6 +17,7 @@ from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
 from groq_parser import parse_resume, extract_text_from_file, is_groq_configured, GROQ_MODEL
+from bulk_processor import init_bulk_processing, UPLOAD_DIR
 
 app = Flask(__name__, static_folder='.')
 CORS(app)
@@ -28,6 +30,9 @@ BULK_MAX_FILES = 50
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = BULK_MAX_SIZE
+
+# Initialize async bulk processing (SQLite + background thread)
+bulk_store = init_bulk_processing(app)
 
 
 # --- Security headers ---
@@ -60,7 +65,12 @@ def parse_single_file(filepath, filename):
         elapsed = int((time.time() - start) * 1000)
 
         if 'error' in result:
-            return {'filename': filename, 'error': result['error'], 'processing_time_ms': elapsed}
+            err = {'filename': filename, 'error': result['error'], 'processing_time_ms': elapsed}
+            if 'finish_reason' in result:
+                err['finish_reason'] = result['finish_reason']
+            if 'raw_response' in result:
+                err['raw_response'] = result['raw_response']
+            return err
 
         return {'filename': filename, 'processing_time_ms': elapsed, 'result': result}
     except Exception as e:
@@ -180,6 +190,80 @@ def parse_bulk():
         'total_processing_time_ms': elapsed,
         'results': results,
     })
+
+
+# --- Async Bulk Processing ---
+
+@app.route('/jobs/bulk', methods=['POST'])
+def submit_bulk_job():
+    """Submit resumes for async bulk parsing. Returns job_id immediately."""
+    if 'files' not in request.files:
+        return jsonify({'error': 'No files provided. Send files with key "files".'}), 400
+
+    files = request.files.getlist('files')
+    if not files:
+        return jsonify({'error': 'No files selected'}), 400
+
+    if len(files) > BULK_MAX_FILES:
+        return jsonify({'error': f'Too many files. Maximum {BULK_MAX_FILES} per request.'}), 400
+
+    # Save files to job-specific upload directory
+    job_id = uuid.uuid4().hex
+    job_upload_dir = os.path.join(UPLOAD_DIR, job_id)
+    os.makedirs(job_upload_dir, exist_ok=True)
+
+    files_info = []
+    for file in files:
+        if file.filename == '' or not allowed_file(file.filename):
+            continue
+        filename = secure_filename(file.filename)
+        stored_name = f"{int(time.time()*1000)}_{filename}"
+        stored_path = os.path.join(job_upload_dir, stored_name)
+        file.save(stored_path)
+        files_info.append((filename, stored_path))
+
+    if not files_info:
+        os.rmdir(job_upload_dir)
+        return jsonify({'error': 'No valid files found in upload.'}), 400
+
+    actual_job_id = bulk_store.create_job(files_info)
+
+    return jsonify({
+        'job_id': actual_job_id,
+        'status': 'processing',
+        'total_files': len(files_info),
+        'message': f'Job submitted. Poll GET /jobs/{actual_job_id} for progress.',
+    }), 202
+
+
+@app.route('/jobs/<job_id>', methods=['GET'])
+def get_job_status(job_id):
+    """Get current status and progress of a bulk parse job."""
+    status = bulk_store.get_job_status(job_id)
+    if not status:
+        return jsonify({'error': 'Job not found'}), 404
+    return jsonify(status)
+
+
+@app.route('/jobs/<job_id>/results', methods=['GET'])
+def get_job_results(job_id):
+    """Get completed results for a bulk parse job."""
+    status = bulk_store.get_job_status(job_id)
+    if not status:
+        return jsonify({'error': 'Job not found'}), 404
+
+    if status['status'] != 'completed':
+        return jsonify({
+            'error': 'Job not yet completed',
+            'status': status['status'],
+            'progress_pct': status['progress_pct'],
+        }), 409
+
+    results = bulk_store.get_results(job_id)
+    if not results:
+        return jsonify({'error': 'Results file not found'}), 404
+
+    return jsonify(results)
 
 
 @app.route('/import/csv', methods=['POST'])

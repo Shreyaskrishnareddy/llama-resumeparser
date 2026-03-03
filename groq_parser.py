@@ -29,7 +29,7 @@ RULES:
 - For RelevantJobTitles: list 3-5 synonymous or closely related job titles for the CurrentJobRole (e.g., "Software Engineer" → ["Software Developer", "SDE", "Application Developer", "Full Stack Developer"]).
 - For each skill: SkillExperienceInMonths = sum of months for each role where the skill was explicitly used or mentioned. Only count roles that actually reference or use the skill. LastUsed = the EndDate of the most recent role where it was used. If a skill only appears in a Skills section and not tied to any specific role, use null for SkillExperienceInMonths. Do NOT assign the same number to every skill — each skill should have a different value based on actual usage across roles.
 - IMPORTANT: Certifications (PMP, Scrum Master, CCNA, AWS Certified, etc.) are NOT skills — put them ONLY in Certifications. Spoken/human languages (English, Spanish, Arabic, etc.) are NOT skills — put them ONLY in Languages. ONLY extract skills that are explicitly written/named in the resume text. NEVER add skills that do not appear in the resume — if "Python" is not written anywhere in the resume, do not add Python.
-- For Languages: ONLY extract spoken/human languages that are explicitly listed in the resume (e.g., "Languages: English, Spanish"). Do NOT confuse programming languages (C, Java, Python, etc.) with spoken languages. If the resume has a "Languages" section that lists programming languages, those go in Skills, NOT Languages. If no spoken languages are mentioned anywhere in the resume, return an empty array []. NEVER assume or add "English" — only include it if the resume explicitly states it.
+- For Languages: ONLY extract spoken/human languages if the resume has an explicit "Languages" section that lists them (e.g., "Languages: English, Spanish"). Do NOT confuse programming languages (C, Java, Python, etc.) with spoken languages. If the resume does NOT have a dedicated "Languages" section listing spoken languages, return an empty array []. NEVER assume or add "English" just because the resume is written in English — only include it if the word "English" appears in a Languages section. When in doubt, return [].
 - For each experience entry, extract ONLY the job title written directly next to that company name. Each position has its own unique title — never copy a title from one position to another.
 - For experience Location: extract the city, state, or country where the role was based. Industry descriptors in parentheses like "(Banking)", "(Healthcare)", "(Entertainment / Wireless)" are NOT locations — ignore them. Look for actual geographic names like city and state.
 - For EmploymentType: ONLY use a value if the resume explicitly says "Full-time", "Part-time", "Contract", "Internship", "Freelance", or "Temporary" near that role. If the employment type is NOT written in the resume text, you MUST use null. Do NOT assume or default to "Full-time".
@@ -37,7 +37,7 @@ RULES:
 - For Education Type: infer "Full-time", "Part-time", "Online", or "Distance" if possible. Default to "Full-time" if not stated.
 - For Certifications: split into name, issuing organization, and year if mentioned (e.g., "AWS Solutions Architect - 2023" → Name: "AWS Solutions Architect", Issuer: "Amazon Web Services", IssuedYear: "2023").
 - For Projects: link to the company/experience where the project was done if evident. Extract or infer the candidate's role in the project.
-- Keep all string values concise. KeyResponsibilities should be short bullet strings, not paragraphs. Include ALL responsibility bullets from the resume for each role — do not truncate or limit to 5.
+- Keep all string values concise. KeyResponsibilities should be short bullet strings (max 1 sentence each), not paragraphs. Include up to 10 of the most important responsibility bullets per role. If a role has more than 10 bullets, pick the 10 most relevant ones.
 - Extract ALL skills from the resume's skills/technologies sections. If the resume has a technical skills table, extract every technology listed there.
 - Use JSON null (not the string "null") for any field where information is not available in the resume.
 - For CurrentJobRole: use the job title from the MOST RECENT (first listed) experience entry. Do NOT use section headers like "Executive Briefing", "Summary", "Profile", or resume subtitles. The CurrentJobRole must be an actual job title held at a company.
@@ -46,11 +46,16 @@ RULES:
 - For Achievements: extract ONLY bullet points or sentences from the resume that contain a specific number, percentage, dollar amount, or measurable metric AND describe something the candidate accomplished. If the resume has no such quantified accomplishments, return an empty array []. NEVER generate, infer, or reword text that is not explicitly in the resume. Return [] if unsure.
 
 FINAL REMINDERS (MUST FOLLOW):
-1. ListOfSkills must NEVER include: spoken language names (English, Arabic, Spanish, Hindi, etc.), certifications (PMP, AWS, CCNA, etc.), or soft skills. Soft skills include but are not limited to: communication, problem solving, leadership, teamwork, multi-tasking, time management, analytical skills, organizational skills, detail-oriented, adaptable, creative, interpersonal skills. If the resume has a "Personal Skills" or "Soft Skills" section, SKIP it entirely — do not add those items to ListOfSkills.
+1. ListOfSkills must NEVER include ANY of the following — remove them if present:
+   - Certifications: PMP, Scrum Master, CSM, CCNA, ITIL, CISSP, AWS Certified, Azure Certified, SAFe, Six Sigma, CISM, CISA, or any other certification. These go ONLY in Certifications.
+   - Spoken languages: English, Spanish, Arabic, Hindi, Telugu, French, German, etc. These go ONLY in Languages.
+   - Soft skills: communication, problem solving, leadership, teamwork, multi-tasking, time management, analytical skills, organizational skills, detail-oriented, adaptable, creative, interpersonal skills, process improvement, organizational efficacy.
+   If the resume has a "Personal Skills", "Soft Skills", or "Management Skills" section, SKIP it entirely.
 2. Achievements must be MAX 5 items, each containing a specific metric/number from the resume. Regular job responsibilities go in KeyResponsibilities, NOT Achievements. If no quantified achievements exist, return [].
 3. Each experience's JobTitle must be copied exactly from the resume text for that specific role — do not merge titles across roles.
-4. KeyResponsibilities is HIGH PRIORITY — include ALL bullets from each role. Do not truncate.
+4. KeyResponsibilities — include up to 10 key bullets per role. Keep each bullet to 1 concise sentence.
 5. EmploymentType: only use values explicitly written in the resume (Contract, Full-time, etc.). Use null if not stated.
+6. CRITICAL: Your entire response must be valid JSON only — no markdown, no explanations, no text before or after the JSON. Do NOT use smart/curly quotes (use straight quotes only). Keep your total response concise — aim for under 4000 tokens.
 
 {
   "PersonalDetails": {
@@ -179,9 +184,9 @@ def parse_resume(resume_text, model=None, api_key=None):
                 ],
                 "temperature": 0.1,
                 "top_p": 0.9,
-                "max_tokens": 8192,
+                "max_completion_tokens": 16384,
             },
-            timeout=60,
+            timeout=120,
         )
 
         elapsed_ms = int((time.time() - start) * 1000)
@@ -219,27 +224,196 @@ def parse_resume(resume_text, model=None, api_key=None):
 
         parsed = _post_process(parsed)
 
+        # Remove hallucinated skills not found in resume text
+        try:
+            _fix_skill_hallucination(parsed, resume_text)
+        except Exception:
+            pass
+
         return parsed
 
     except requests.exceptions.Timeout:
-        return {"error": "Groq API timed out after 60s", "processing_time_ms": int((time.time() - start) * 1000)}
+        return {"error": "Groq API timed out after 120s", "processing_time_ms": int((time.time() - start) * 1000)}
     except requests.exceptions.ConnectionError:
         return {"error": "Cannot connect to Groq API. Check your internet connection."}
     except Exception as e:
         return {"error": str(e), "processing_time_ms": int((time.time() - start) * 1000)}
 
 
+def _sanitize_json_text(text):
+    """Sanitize Unicode characters that break JSON parsing.
+
+    Handles smart quotes, em/en dashes, and other common Unicode
+    that LLMs copy from resume text into JSON string values.
+    Works on any resume — not specific to any particular input.
+    """
+    # Replace smart/curly double quotes with escaped straight quotes.
+    # These appear inside JSON string values and break parsing.
+    # We walk the string character by character to only escape them
+    # when they appear inside an already-open JSON string.
+    result = []
+    in_json_str = False
+    i = 0
+    while i < len(text):
+        c = text[i]
+        # Handle escape sequences inside strings
+        if in_json_str and c == '\\' and i + 1 < len(text):
+            result.append(c)
+            result.append(text[i + 1])
+            i += 2
+            continue
+        # Toggle JSON string state on straight double quotes
+        if c == '"':
+            in_json_str = not in_json_str
+            result.append(c)
+        # Smart double quotes inside a JSON string → escaped straight quote
+        elif c in ('\u201c', '\u201d'):
+            if in_json_str:
+                result.append('\\"')
+            else:
+                result.append('"')
+                in_json_str = not in_json_str
+        # Smart single quotes → straight apostrophe (safe in JSON strings)
+        elif c in ('\u2018', '\u2019'):
+            result.append("'")
+        # En/em dashes → hyphen
+        elif c in ('\u2013', '\u2014'):
+            result.append('-')
+        # Ellipsis → three dots
+        elif c == '\u2026':
+            result.append('...')
+        # Other non-ASCII control chars that break JSON
+        elif ord(c) < 32 and c not in ('\n', '\r', '\t'):
+            result.append(' ')
+        else:
+            result.append(c)
+        i += 1
+    return ''.join(result)
+
+
+def _repair_truncated_json(text):
+    """Attempt to repair truncated JSON from a model that hit its token limit.
+
+    Strategy: find the JSON start, walk character by character tracking
+    nesting depth properly (handling strings and escapes), then close
+    any unclosed structures at the truncation point.
+    """
+    start = text.find('{')
+    if start == -1:
+        return None
+
+    fragment = text[start:]
+
+    # Trim the ragged end: find the last complete JSON token boundary.
+    # Walk backward from the end to find a safe cut point: after a
+    # comma, colon, closing bracket/brace, or end of a string value.
+    # This removes partial keys, values, or strings at the truncation edge.
+    last_safe = len(fragment)
+    for j in range(len(fragment) - 1, max(len(fragment) - 500, 0), -1):
+        c = fragment[j]
+        if c in (',', ':', ']', '}', '\n'):
+            last_safe = j + 1
+            break
+        if c == '"':
+            # Check if this quote ends a complete string value
+            last_safe = j + 1
+            break
+
+    fragment = fragment[:last_safe].rstrip().rstrip(',')
+
+    # Track nesting to know what closers are needed
+    depth_brace = 0
+    depth_bracket = 0
+    in_str = False
+    esc = False
+    for c in fragment:
+        if esc:
+            esc = False
+            continue
+        if c == '\\' and in_str:
+            esc = True
+            continue
+        if c == '"' and not esc:
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if c == '{':
+            depth_brace += 1
+        elif c == '}':
+            depth_brace -= 1
+        elif c == '[':
+            depth_bracket += 1
+        elif c == ']':
+            depth_bracket -= 1
+
+    # If we're inside an open string at EOF, close it
+    if in_str:
+        fragment += '"'
+
+    # Close unclosed structures (innermost first)
+    fragment += ']' * max(depth_bracket, 0)
+    fragment += '}' * max(depth_brace, 0)
+
+    try:
+        return json.loads(fragment)
+    except json.JSONDecodeError:
+        pass
+
+    # Last resort: try progressively stripping more from the end
+    for trim in range(1, 20):
+        lines = fragment.rsplit('\n', trim)
+        if len(lines) > 1:
+            candidate = lines[0].rstrip().rstrip(',')
+            # Recount nesting
+            db, dbk, ins, esc2 = 0, 0, False, False
+            for c in candidate:
+                if esc2:
+                    esc2 = False
+                    continue
+                if c == '\\' and ins:
+                    esc2 = True
+                    continue
+                if c == '"' and not esc2:
+                    ins = not ins
+                    continue
+                if ins:
+                    continue
+                if c == '{':
+                    db += 1
+                elif c == '}':
+                    db -= 1
+                elif c == '[':
+                    dbk += 1
+                elif c == ']':
+                    dbk -= 1
+            candidate += ']' * max(dbk, 0) + '}' * max(db, 0)
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+
+    return None
+
+
 def _extract_json(text):
-    """Robust JSON extraction from LLM response."""
+    """Robust JSON extraction from LLM response.
+
+    Handles: clean JSON, markdown-wrapped JSON, smart quotes/Unicode,
+    and truncated JSON from token-limited responses.
+    """
     text = text.strip()
 
-    # Direct parse
+    # Step 1: Sanitize Unicode characters
+    text = _sanitize_json_text(text)
+
+    # Step 2: Try direct parse
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # Markdown code block
+    # Step 3: Try markdown code block extraction
     for pattern in [r'```json\s*(.*?)\s*```', r'```\s*(.*?)\s*```']:
         match = re.search(pattern, text, re.DOTALL)
         if match:
@@ -248,7 +422,7 @@ def _extract_json(text):
             except json.JSONDecodeError:
                 continue
 
-    # Brace matching — find outermost { }
+    # Step 4: Brace matching — find outermost complete { }
     start = text.find('{')
     if start != -1:
         depth = 0
@@ -277,7 +451,8 @@ def _extract_json(text):
                     except json.JSONDecodeError:
                         break
 
-    return None
+    # Step 5: Attempt to repair truncated JSON (from token limit cutoff)
+    return _repair_truncated_json(text)
 
 
 # --- Post-processing constants ---
@@ -467,6 +642,122 @@ def _fix_project_company(parsed):
             proj["CompanyWorked"] = None
 
 
+_CERT_KEYWORDS = {"pmp", "scrum master", "csm", "ccna", "itil", "cissp", "cism", "cisa",
+                   "aws certified", "azure certified", "safe", "six sigma", "prince2",
+                   "togaf", "comptia", "certified scrum"}
+_SOFT_SKILL_KEYWORDS = {"communication", "leadership", "teamwork", "problem solving",
+                        "time management", "multi-tasking", "analytical skills",
+                        "organizational skills", "detail-oriented", "interpersonal",
+                        "adaptable", "creative", "organizational efficacy",
+                        "process improvement", "process & organizational"}
+
+
+def _fix_skill_contamination(parsed):
+    """Remove certifications and soft skills that leaked into ListOfSkills."""
+    skills = parsed.get("ListOfSkills")
+    if not isinstance(skills, list):
+        return
+    cleaned = []
+    for skill in skills:
+        if not isinstance(skill, dict):
+            cleaned.append(skill)
+            continue
+        name = skill.get("SkillName", "")
+        if not isinstance(name, str):
+            cleaned.append(skill)
+            continue
+        name_lower = name.strip().lower()
+        # Check if it's a certification
+        if any(kw in name_lower for kw in _CERT_KEYWORDS):
+            continue
+        # Check if it's a soft skill
+        if any(kw in name_lower for kw in _SOFT_SKILL_KEYWORDS):
+            continue
+        cleaned.append(skill)
+    parsed["ListOfSkills"] = cleaned
+
+
+def _fix_empty_certs(parsed):
+    """Remove hallucinated placeholder certification objects with null/empty names."""
+    certs = parsed.get("Certifications")
+    if not isinstance(certs, list):
+        return
+    cleaned = []
+    for cert in certs:
+        if not isinstance(cert, dict):
+            continue
+        name = cert.get("CertificationName") or cert.get("Name") or ""
+        if isinstance(name, str) and name.strip().lower() not in ("", "null", "none", "n/a"):
+            cleaned.append(cert)
+    parsed["Certifications"] = cleaned
+
+
+def _find_skill_in_text(skill_name, text):
+    """Check if a skill name appears in the resume text.
+
+    Handles short names (C, R, Go) with word boundaries,
+    special chars (C#, .NET, C++) with direct substring matching,
+    and standard case-insensitive substring matching.
+    """
+    if not skill_name or not text:
+        return False
+
+    name = skill_name.strip()
+    name_lower = name.lower()
+    text_lower = text.lower()
+
+    # Names with special chars (C#, C++, .NET, etc.) — use direct substring
+    if any(c in name for c in '#.+/&'):
+        return name_lower in text_lower
+
+    # Very short names (1-2 chars like C, R) need word boundary matching
+    if len(name) <= 2:
+        try:
+            return bool(re.search(r'\b' + re.escape(name_lower) + r'\b', text_lower))
+        except re.error:
+            return name_lower in text_lower
+
+    # Direct case-insensitive substring match (handles most cases)
+    if name_lower in text_lower:
+        return True
+
+    # Word-boundary match for medium-length names (avoids partial matches)
+    if len(name) <= 20:
+        try:
+            if re.search(r'\b' + re.escape(name_lower) + r'\b', text_lower):
+                return True
+        except re.error:
+            pass
+
+    return False
+
+
+def _fix_skill_hallucination(parsed, resume_text):
+    """Remove skills whose SkillName does not appear in the resume text.
+
+    The LLM sometimes generates plausible skills that aren't actually
+    mentioned in the resume. This checks each SkillName against the
+    original text and removes any that can't be found.
+    """
+    skills = parsed.get("ListOfSkills")
+    if not isinstance(skills, list) or not resume_text:
+        return
+
+    cleaned = []
+    for skill in skills:
+        if not isinstance(skill, dict):
+            cleaned.append(skill)
+            continue
+        name = skill.get("SkillName", "")
+        if not isinstance(name, str) or not name.strip():
+            continue  # drop skills with no name
+        if _find_skill_in_text(name, resume_text):
+            cleaned.append(skill)
+        # else: skill not found in resume text, drop it
+
+    parsed["ListOfSkills"] = cleaned
+
+
 def _fix_employment_type(parsed):
     """Null out default 'Full-time' employment types that the LLM fabricates."""
     experiences = parsed.get("ListOfExperiences")
@@ -514,6 +805,18 @@ def _post_process(parsed):
     try:
         _fix_project_company(parsed)
         applied.append("project_company")
+    except Exception:
+        pass
+
+    try:
+        _fix_skill_contamination(parsed)
+        applied.append("skill_contamination")
+    except Exception:
+        pass
+
+    try:
+        _fix_empty_certs(parsed)
+        applied.append("empty_certs")
     except Exception:
         pass
 

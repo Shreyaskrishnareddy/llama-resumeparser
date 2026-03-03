@@ -8,8 +8,9 @@ LLM-powered resume parser using **Llama 3.1 8B** via [Groq](https://groq.com) fo
 - **Structured JSON output** — personal details, experiences, education, skills, certifications, projects, achievements
 - **~2 second latency** — Groq's LPU inference engine makes LLM parsing practical for production
 - **File upload + raw text APIs** — supports PDF, DOC, DOCX, TXT, JPG, PNG, TIFF, BMP (OCR)
-- **Web UI included** — drag-and-drop interface with structured result display
-- **Bulk processing** — upload up to 50 files or import from CSV
+- **Web UI included** — drag-and-drop interface with single and bulk upload tabs
+- **Async bulk processing** — submit hundreds of resumes, poll progress, download results when done
+- **Skill hallucination guard** — post-processing verifies every extracted skill exists in the resume text
 - **ATS integration** — output mapped to Bullhorn, Dice, Ceipal formats
 - **OCR support** — parse scanned PDFs and images via Tesseract
 - **Security headers** — XSS, clickjacking, content-type protections
@@ -132,7 +133,7 @@ curl -X POST http://localhost:8000/parse/text \
   -d '{"text": "John Smith\njohn@email.com\n\nEXPERIENCE\n..."}'
 ```
 
-### `POST /parse/bulk` — Bulk upload (up to 50 files)
+### `POST /parse/bulk` — Synchronous bulk upload (up to 50 files)
 
 ```bash
 curl -X POST http://localhost:8000/parse/bulk \
@@ -148,6 +149,67 @@ curl -X POST http://localhost:8000/parse/bulk \
   "failed": 0,
   "total_processing_time_ms": 8500,
   "results": [...]
+}
+```
+
+### Async Bulk Processing (Recommended for large batches)
+
+#### `POST /jobs/bulk` — Submit async bulk job
+
+Upload files and get a job ID immediately. Files are processed in the background.
+
+```bash
+curl -X POST http://localhost:8000/jobs/bulk \
+  -F "files=@resume1.pdf" \
+  -F "files=@resume2.docx" \
+  -F "files=@resume3.pdf"
+```
+
+```json
+{
+  "job_id": "e88b0151138044ebb474a3d66304528c",
+  "status": "processing",
+  "total_files": 3,
+  "message": "Job submitted. Poll GET /jobs/e88b01... for progress."
+}
+```
+
+#### `GET /jobs/<job_id>` — Poll job progress
+
+```bash
+curl http://localhost:8000/jobs/e88b0151138044ebb474a3d66304528c
+```
+
+```json
+{
+  "job_id": "e88b0151138044ebb474a3d66304528c",
+  "status": "processing",
+  "total_files": 3,
+  "completed_files": 2,
+  "failed_files": 0,
+  "progress_pct": 66.7
+}
+```
+
+#### `GET /jobs/<job_id>/results` — Download results
+
+Available once job status is `completed`.
+
+```bash
+curl http://localhost:8000/jobs/e88b0151138044ebb474a3d66304528c/results
+```
+
+```json
+{
+  "job_id": "e88b01...",
+  "total_files": 3,
+  "successful": 3,
+  "failed": 0,
+  "results": [
+    { "filename": "resume1.pdf", "status": "completed", "result": { ... } },
+    { "filename": "resume2.docx", "status": "completed", "result": { ... } },
+    { "filename": "resume3.pdf", "status": "completed", "result": { ... } }
+  ]
 }
 ```
 
@@ -182,6 +244,9 @@ curl http://localhost:8000/health
 | `GROQ_API_KEY` | *(required)* | Your Groq API key |
 | `GROQ_MODEL` | `llama-3.1-8b-instant` | Groq model to use |
 | `PORT` | `8000` | Server port |
+| `BULK_RATE_INTERVAL` | `2.0` | Seconds between async bulk API calls |
+| `BULK_JOB_TTL_HOURS` | `24` | Hours before completed jobs are cleaned up |
+| `BULK_DATA_DIR` | `./data` | Directory for SQLite DB, uploads, and results |
 
 ### Supported Models
 
@@ -197,12 +262,14 @@ Any model available on [Groq](https://console.groq.com/docs/models) works. Teste
 
 ```
 llama-resumeparser/
-  app.py              # Flask API server
-  groq_parser.py      # Core parser — Groq API + JSON extraction
-  index.html          # Web UI (drag-and-drop upload)
+  app.py              # Flask API server (single, bulk, async, ATS endpoints)
+  groq_parser.py      # Core parser — Groq API + JSON extraction + post-processing
+  bulk_processor.py   # Async bulk processing — SQLite job queue + background worker
+  index.html          # Web UI (single + bulk upload tabs)
   requirements.txt    # Python dependencies
   Dockerfile          # Production container
   .env.example        # Environment variable template
+  data/               # Runtime: SQLite DB, uploads, results (gitignored)
 ```
 
 ## How It Works
