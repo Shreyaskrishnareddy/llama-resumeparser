@@ -14,3 +14,6 @@ olefile==0.47
 # OCR Support (JPEG/PNG/TIFF/BMP/scanned PDFs)
 pytesseract==0.3.13
 Pillow==11.1.0
+
+# Taxonomy (shared skill/title/cert normalization)
+groq-taxonomy @ git+https://github.com/Shreyaskrishnareddy/monorepo.git#subdirectory=packages/taxonomy

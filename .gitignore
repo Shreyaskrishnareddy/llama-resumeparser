@@ -28,3 +28,6 @@ uploads/
 
 # Async bulk processing data
 data/
+
+# Test results (QA reports, cycle outputs)
+test-results/

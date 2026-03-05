@@ -230,6 +230,13 @@ def parse_resume(resume_text, model=None, api_key=None):
         except Exception:
             pass
 
+        # Enrich with taxonomy normalization (canonical IDs, categories, etc.)
+        try:
+            from groq_taxonomy import enrich_resume
+            parsed = enrich_resume(parsed)
+        except ImportError:
+            pass
+
         return parsed
 
     except requests.exceptions.Timeout:
